@@ -1,4 +1,4 @@
-# 寻路算法可视化与Navmesh实践
+# 寻路算法可视化、随机地图与Navmesh实践
 
 本项目主要参照了[*Red Blob Games*](https://www.redblobgames.com/)相关寻路算法的文章，以及借鉴了[BeaverJoe的广度优先搜索](https://www.bilibili.com/video/BV1X54y1D7Z4)
 
@@ -108,6 +108,108 @@ void Start(){
         }
  
  }
+```
+
+
+
+## 随机地图
+
+在上述的算法可视化当中，我主要还是利用了较为简单的Random方法来进行随机地图的生成，这样的生成方法会出现两个问题：
+
+- 障碍物的生成坐标完全随机，会出现**重复位置生成**的问题
+- 生成的障碍物图会形成闭环，也就是会**出现无法行走的路径**
+
+为了解决上述两种问题，我们在这里引入两种算法：**洗牌算法，洪水填充算法**。
+
+### 洗牌算法
+
+洗牌算法的核心是先通过随机种子得到一个乱序的障碍物生成坐标序列，该序列的全集是整个地图区域，之后我们将该序列存入到一个队列当中，根据队列的FIFO原则，我们每次取得一个随机坐标点后将该点从队列中取出并放到队尾，这样我们便可以完全得到一个不重复的随机队列。
+
+```c#
+    /*  洗牌算法
+    1. Fisher-Yates Shuffle算法：将每次随机到的数字存储到一个缓存的list中，在下一次随机时删除这些元素并打乱原先的list (缺点：占用了额外的内存空间，空间复杂度高啦)
+    2.Knuth-Durstenfeld Shuffle算法：交换元素顺序以及使用队列先进先出的序列进行洗牌（推荐！）
+    */
+    public static List<Vector2Int> ShuffleCoords(List<Vector2Int> _dataList)
+    {
+        for (int i = 0; i < _dataList.Count; i++)
+        {
+            //进阶：这里可以使用噪声作为随机种子，这里是随机在datalist中选择一个数字并与当前交换
+            int randomNum = Random.Range(i, _dataList.Count);
+            Vector2Int temp = _dataList[randomNum];
+            _dataList[randomNum] = _dataList[i];
+            _dataList[i] = temp;
+        }
+        return _dataList;
+    }
+```
+
+### 洪水填充算法
+
+洪水填充算法的核心其实也是利用了寻路算法，我们利用BFS对整张地图进行搜索并标记当前所有可以行走的区域，其实就是要搜索当前的连通图，我们可以通过access来保存当前可以通行的坐标数量，这里我们用一个类似回溯的算法。我们将某一个随机点加入当前的地图中，使用BFS算法进行计算当前的access值，若地图总量mapSize-access<障碍物总数，表示该点不能再放障碍物了，我们将该随机障碍物点的坐标标记为false，并移除该点。
+
+```c#
+private void ObstacleGenerate() {
+   int obsCount = (int)(mapSize.x * mapSize.y * obsPercent);
+   mapCenter = new Vector2Int((int)(mapSize.x / 2), (int)(mapSize.y / 2));  //设置地图中心点
+   mapObstacles = new bool[(int)mapSize.x, (int)mapSize.y];             //初始化二维布尔数组
+
+   //洗牌算法ShuffleCoords，已经得到乱序队列
+   TileCoordQueue = new Queue<Vector2Int>(Utility.ShuffleCoords(TileCoordList));
+
+   //默认当前障碍物数量为0
+   int currentObsCount = 0;
+
+   for (int i = 0; i < obsCount; i++)
+   {
+     //根据洗牌算法得到某个可以摆放Obstacle的点
+     Vector2Int randomCoord = TileCoordQueue.Dequeue();
+     TileCoordQueue.Enqueue(randomCoord);
+
+      //洪水填充算法开始：满足条件才能生成障碍物(类似回溯算法)
+     mapObstacles[randomCoord.x, randomCoord.y] = true;     
+     currentObsCount++;
+
+     if (randomCoord != mapCenter && MapIsFullyAccessible(mapObstacles, currentObsCount))
+     {
+			...//添加该障碍物点	
+     }
+     else {
+     	 //移除该障碍物点
+         mapObstacles[randomCoord.x, randomCoord.y] = false;
+         currentObsCount--;
+     }
+  }
+}
+
+//洪水填充算法
+private bool MapIsFullyAccessible(bool[,] _mapObstacles, int _currentObsCount)
+{
+    bool[,] mapFlags = new bool[_mapObstacles.GetLength(0), _mapObstacles.GetLength(1)]; //这里的mapFlag类似于搜索算法中的visited数组
+    Queue<Vector2Int> queue = new Queue<Vector2Int>(); //所有的坐标会在筛选后存储到这个队列中
+    queue.Enqueue(mapCenter);
+    mapFlags[mapCenter.x, mapCenter.y] = true; //中心点标记为已检测
+
+    int accessibleCount = 1; //初始化当前实际可走的瓦片数量（中心可走，因此现在为1）
+    while (queue.Count > 0) {
+        Vector2Int currentTile = queue.Dequeue();
+        foreach (var item in directions) //按照上右下左的顺序进行遍历搜索
+        {
+           var explore = currentTile + item;
+           int x = explore.x;
+           int y = explore.y;
+           //判断边界
+           if (x >= 0 && x < _mapObstacles.GetLength(0) && y >= 0 && y < 	 mapObstacles.GetLength(1)) {
+                if (!mapFlags[x, y] && !_mapObstacles[x, y]) {
+                    mapFlags[x, y] = true;
+                    accessibleCount++;
+                    queue.Enqueue(explore);
+                }
+            }
+        }
+    }
+    return accessibleCount == (int)(mapSize.x*mapSize.y - _currentObsCount);
+}
 ```
 
 
